@@ -39,6 +39,7 @@ import { extractUrlCommand } from './commands/extract-url'
 import { incomingCommand } from './commands/incoming'
 import { mineCommand } from './commands/mine'
 import { openCommand } from './commands/open'
+import { openChangesCommand } from './commands/open-changes'
 import { reviewCommand } from './commands/review'
 import { setup } from './commands/setup'
 import { showCommand } from './commands/show'
@@ -224,6 +225,48 @@ program
         console.log(`</mine_result>`)
       } else {
         console.error('✗ Error:', error instanceof Error ? error.message : String(error))
+      }
+      process.exit(1)
+    }
+  })
+
+// open-changes command
+program
+  .command('open-changes')
+  .description('Show all open changes for the current project with reviewer information')
+  .option('-n, --limit <number>', 'Maximum number of changes to show (default: 20)', '20')
+  .option('--json', 'JSON output for programmatic consumption')
+  .option('--xml', 'XML output for LLM consumption')
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ ger open-changes              # Show open changes for current project
+  $ ger open-changes -n 10        # Limit to 10 changes
+  $ ger open-changes --json       # JSON output for scripting
+
+Note: Project is auto-detected from git remote origin. Changes sorted by most recently updated.`,
+  )
+  .action(async (options) => {
+    try {
+      const effect = openChangesCommand({
+        limit: Number.parseInt(options.limit, 10),
+        json: options.json,
+        xml: options.xml,
+      }).pipe(Effect.provide(GerritApiServiceLive), Effect.provide(ConfigServiceLive))
+      await Effect.runPromise(effect)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (options.json) {
+        console.log(JSON.stringify({ status: 'error', error: errorMessage }, null, 2))
+      } else if (options.xml) {
+        console.log(`<?xml version="1.0" encoding="UTF-8"?>`)
+        console.log(`<open_changes_result>`)
+        console.log(`  <status>error</status>`)
+        console.log(`  <error><![CDATA[${sanitizeCDATA(errorMessage)}]]></error>`)
+        console.log(`</open_changes_result>`)
+      } else {
+        console.error('✗ Error:', errorMessage)
       }
       process.exit(1)
     }
