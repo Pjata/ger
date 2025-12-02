@@ -264,9 +264,59 @@ describe('open-changes command', () => {
       )
 
       const output = mockConsoleLog.mock.calls.map((call) => call[0]).join('\n')
-      // Should show pending indicators
+      // Should show "no reviewers" when labels are empty
       expect(output).toContain('CR:')
       expect(output).toContain('V:')
+    })
+
+    test('should display pending reviewers from all array', async () => {
+      setupGitMock('ssh://gerrit.example.com/test-project\n')
+
+      const mockChanges: ChangeInfo[] = [
+        generateMockChange({
+          _number: 12345,
+          subject: 'Change with pending reviewer',
+          project: 'test-project',
+          status: 'NEW',
+          labels: {
+            'Code-Review': {
+              all: [
+                { _account_id: 1001, name: 'Alice Voted', value: 2 },
+                { _account_id: 1002, name: 'Bob Pending', value: 0 },
+                { _account_id: 1003, name: 'Carol Also Pending' }, // no value = pending
+              ],
+            },
+            Verified: {
+              all: [{ _account_id: 1004, name: 'Jenkins', value: 1 }],
+            },
+          },
+        }),
+      ]
+
+      server.use(
+        http.get('*/a/changes/', () => {
+          return HttpResponse.text(`)]}'\n${JSON.stringify(mockChanges)}`)
+        }),
+      )
+
+      const mockConfigLayer = Layer.succeed(ConfigService, createMockConfigService())
+      await Effect.runPromise(
+        openChangesCommand({}).pipe(
+          Effect.provide(GerritApiServiceLive),
+          Effect.provide(mockConfigLayer),
+        ),
+      )
+
+      const output = mockConsoleLog.mock.calls.map((call) => call[0]).join('\n')
+
+      // Check that voted reviewer is shown with vote
+      expect(output).toContain('Alice Voted')
+      expect(output).toContain('+2')
+
+      // Check that pending reviewers are shown with pending indicator
+      expect(output).toContain('Bob Pending')
+      expect(output).toContain('Carol Also Pending')
+      expect(output).toContain('⏳')
     })
 
     test('should handle no open changes gracefully', async () => {
@@ -337,6 +387,53 @@ describe('open-changes command', () => {
       expect(parsed.changes[0].reviewers['Code-Review'][0].name).toBe('Alice')
       expect(parsed.changes[0].reviewers['Code-Review'][0].value).toBe(2)
       expect(parsed.changes[0].reviewers.Verified).toHaveLength(1)
+    })
+
+    test('should include pending flag in JSON output', async () => {
+      setupGitMock('ssh://gerrit.example.com/test-project\n')
+
+      const mockChanges: ChangeInfo[] = [
+        generateMockChange({
+          _number: 12345,
+          subject: 'Test change',
+          project: 'test-project',
+          status: 'NEW',
+          labels: {
+            'Code-Review': {
+              all: [
+                { _account_id: 1001, name: 'Alice', value: 1 },
+                { _account_id: 1002, name: 'Bob', value: 0 },
+              ],
+            },
+            Verified: {},
+          },
+        }),
+      ]
+
+      server.use(
+        http.get('*/a/changes/', () => {
+          return HttpResponse.text(`)]}'\n${JSON.stringify(mockChanges)}`)
+        }),
+      )
+
+      const mockConfigLayer = Layer.succeed(ConfigService, createMockConfigService())
+      await Effect.runPromise(
+        openChangesCommand({ json: true }).pipe(
+          Effect.provide(GerritApiServiceLive),
+          Effect.provide(mockConfigLayer),
+        ),
+      )
+
+      const output = mockConsoleLog.mock.calls.map((call) => call[0]).join('\n')
+      const parsed = JSON.parse(output)
+
+      expect(parsed.changes[0].reviewers['Code-Review']).toHaveLength(2)
+      // Alice voted, not pending
+      expect(parsed.changes[0].reviewers['Code-Review'][0].name).toBe('Alice')
+      expect(parsed.changes[0].reviewers['Code-Review'][0].pending).toBe(false)
+      // Bob didn't vote, is pending
+      expect(parsed.changes[0].reviewers['Code-Review'][1].name).toBe('Bob')
+      expect(parsed.changes[0].reviewers['Code-Review'][1].pending).toBe(true)
     })
   })
 

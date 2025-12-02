@@ -68,6 +68,13 @@ export const ChangeInfo: Schema.Schema<{
         readonly username?: string
       }
       readonly value?: number
+      readonly all?: ReadonlyArray<{
+        readonly _account_id: number
+        readonly name?: string
+        readonly email?: string
+        readonly username?: string
+        readonly value?: number
+      }>
     }
   >
   readonly submittable?: boolean
@@ -129,6 +136,18 @@ export const ChangeInfo: Schema.Schema<{
           }),
         ),
         value: Schema.optional(Schema.Number),
+        // All reviewers who can vote on this label (from DETAILED_LABELS)
+        all: Schema.optional(
+          Schema.Array(
+            Schema.Struct({
+              _account_id: Schema.Number,
+              name: Schema.optional(Schema.String),
+              email: Schema.optional(Schema.String),
+              username: Schema.optional(Schema.String),
+              value: Schema.optional(Schema.Number),
+            }),
+          ),
+        ),
       }),
     }),
   ),

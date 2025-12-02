@@ -17,6 +17,7 @@ interface OpenChangesOptions {
 interface ReviewerVote {
   name: string
   value: number
+  pending: boolean
 }
 
 interface LabelVotes {
@@ -79,7 +80,7 @@ const detectProject = (): Effect.Effect<string, Error> =>
   })
 
 /**
- * Extracts reviewer votes from change labels
+ * Extracts reviewer votes from change labels, including pending reviewers
  */
 const extractReviewerVotes = (change: ChangeInfo): LabelVotes => {
   const votes: LabelVotes = {
@@ -90,31 +91,55 @@ const extractReviewerVotes = (change: ChangeInfo): LabelVotes => {
   const labels = change.labels
   if (!labels) return votes
 
-  // Extract Code-Review votes
+  // Extract Code-Review votes from 'all' array (includes pending reviewers)
   const cr = labels['Code-Review']
-  if (cr) {
+  if (cr?.all) {
+    for (const reviewer of cr.all) {
+      const value = reviewer.value ?? 0
+      votes['Code-Review'].push({
+        name: reviewer.name || 'Unknown',
+        value,
+        pending: value === 0,
+      })
+    }
+  } else if (cr) {
+    // Fallback to individual fields if 'all' is not available
     if (cr.approved) {
-      votes['Code-Review'].push({ name: cr.approved.name || 'Unknown', value: 2 })
+      votes['Code-Review'].push({ name: cr.approved.name || 'Unknown', value: 2, pending: false })
     }
     if (cr.recommended) {
-      votes['Code-Review'].push({ name: cr.recommended.name || 'Unknown', value: 1 })
+      votes['Code-Review'].push({
+        name: cr.recommended.name || 'Unknown',
+        value: 1,
+        pending: false,
+      })
     }
     if (cr.disliked) {
-      votes['Code-Review'].push({ name: cr.disliked.name || 'Unknown', value: -1 })
+      votes['Code-Review'].push({ name: cr.disliked.name || 'Unknown', value: -1, pending: false })
     }
     if (cr.rejected) {
-      votes['Code-Review'].push({ name: cr.rejected.name || 'Unknown', value: -2 })
+      votes['Code-Review'].push({ name: cr.rejected.name || 'Unknown', value: -2, pending: false })
     }
   }
 
-  // Extract Verified votes
+  // Extract Verified votes from 'all' array
   const v = labels['Verified']
-  if (v) {
+  if (v?.all) {
+    for (const reviewer of v.all) {
+      const value = reviewer.value ?? 0
+      votes['Verified'].push({
+        name: reviewer.name || 'Unknown',
+        value,
+        pending: value === 0,
+      })
+    }
+  } else if (v) {
+    // Fallback to individual fields if 'all' is not available
     if (v.approved) {
-      votes['Verified'].push({ name: v.approved.name || 'Unknown', value: 1 })
+      votes['Verified'].push({ name: v.approved.name || 'Unknown', value: 1, pending: false })
     }
     if (v.rejected) {
-      votes['Verified'].push({ name: v.rejected.name || 'Unknown', value: -1 })
+      votes['Verified'].push({ name: v.rejected.name || 'Unknown', value: -1, pending: false })
     }
   }
 
@@ -123,7 +148,7 @@ const extractReviewerVotes = (change: ChangeInfo): LabelVotes => {
 
 /**
  * Formats reviewer votes for display
- * e.g., "CR: +2 Alice, +1 Bob  V: +1 Jenkins"
+ * e.g., "CR: +2 Alice, +1 Bob, ⏳ Carol  V: +1 Jenkins"
  */
 const formatReviewerVotes = (votes: LabelVotes): string => {
   const parts: string[] = []
@@ -131,8 +156,16 @@ const formatReviewerVotes = (votes: LabelVotes): string => {
   // Format Code-Review votes
   if (votes['Code-Review'].length > 0) {
     const crVotes = votes['Code-Review']
-      .sort((a, b) => b.value - a.value) // Sort by value descending
+      .sort((a, b) => {
+        // Sort: positive votes first, then pending (0), then negative
+        if (a.pending && !b.pending) return 1
+        if (!a.pending && b.pending) return -1
+        return b.value - a.value
+      })
       .map((v) => {
+        if (v.pending) {
+          return `${colors.gray}⏳ ${v.name}${colors.reset}`
+        }
         const sign = v.value > 0 ? '+' : ''
         const color = v.value > 0 ? colors.green : colors.red
         return `${color}${sign}${v.value}${colors.reset} ${v.name}`
@@ -140,14 +173,21 @@ const formatReviewerVotes = (votes: LabelVotes): string => {
       .join(', ')
     parts.push(`CR: ${crVotes}`)
   } else {
-    parts.push(`CR: ${colors.gray}⏳${colors.reset}`)
+    parts.push(`CR: ${colors.gray}no reviewers${colors.reset}`)
   }
 
-  // Format Verified votes
+  // Format Verified votes (usually bots, so pending is less common)
   if (votes['Verified'].length > 0) {
     const vVotes = votes['Verified']
-      .sort((a, b) => b.value - a.value)
+      .sort((a, b) => {
+        if (a.pending && !b.pending) return 1
+        if (!a.pending && b.pending) return -1
+        return b.value - a.value
+      })
       .map((v) => {
+        if (v.pending) {
+          return `${colors.gray}⏳ ${v.name}${colors.reset}`
+        }
         const sign = v.value > 0 ? '+' : ''
         const color = v.value > 0 ? colors.green : colors.red
         return `${color}${sign}${v.value}${colors.reset} ${v.name}`
@@ -239,13 +279,15 @@ const renderXml = (changes: readonly ChangeInfo[], project: string): void => {
     console.log('      <label name="Code-Review">')
     for (const vote of votes['Code-Review']) {
       const sign = vote.value > 0 ? '+' : ''
-      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"/>`)
+      const pending = vote.pending ? ' pending="true"' : ''
+      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"${pending}/>`)
     }
     console.log('      </label>')
     console.log('      <label name="Verified">')
     for (const vote of votes['Verified']) {
       const sign = vote.value > 0 ? '+' : ''
-      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"/>`)
+      const pending = vote.pending ? ' pending="true"' : ''
+      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"${pending}/>`)
     }
     console.log('      </label>')
     console.log('    </reviewers>')
