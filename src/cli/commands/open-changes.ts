@@ -80,7 +80,9 @@ const detectProject = (): Effect.Effect<string, Error> =>
   })
 
 /**
- * Extracts reviewer votes from change labels, including pending reviewers
+ * Extracts reviewer votes from change labels.
+ * Code-Review: includes all reviewers (voted + pending)
+ * Verified: only includes reviewers who have voted (typically CI bots)
  */
 const extractReviewerVotes = (change: ChangeInfo): LabelVotes => {
   const votes: LabelVotes = {
@@ -123,14 +125,17 @@ const extractReviewerVotes = (change: ChangeInfo): LabelVotes => {
   }
 
   // Extract Verified votes from 'all' array
+  // Only show reviewers who have actually voted (not pending) since Verified is typically for CI bots
   const v = labels['Verified']
   if (v?.all) {
     for (const reviewer of v.all) {
       const value = reviewer.value ?? 0
+      // Skip pending reviewers for Verified - they're unlikely to vote here
+      if (value === 0) continue
       votes['Verified'].push({
         name: reviewer.name || 'Unknown',
         value,
-        pending: value === 0,
+        pending: false,
       })
     }
   } else if (v) {
@@ -176,18 +181,11 @@ const formatReviewerVotes = (votes: LabelVotes): string => {
     parts.push(`CR: ${colors.gray}no reviewers${colors.reset}`)
   }
 
-  // Format Verified votes (usually bots, so pending is less common)
+  // Format Verified votes (only shows actual votes, typically from CI bots)
   if (votes['Verified'].length > 0) {
     const vVotes = votes['Verified']
-      .sort((a, b) => {
-        if (a.pending && !b.pending) return 1
-        if (!a.pending && b.pending) return -1
-        return b.value - a.value
-      })
+      .sort((a, b) => b.value - a.value)
       .map((v) => {
-        if (v.pending) {
-          return `${colors.gray}⏳ ${v.name}${colors.reset}`
-        }
         const sign = v.value > 0 ? '+' : ''
         const color = v.value > 0 ? colors.green : colors.red
         return `${color}${sign}${v.value}${colors.reset} ${v.name}`
@@ -195,7 +193,7 @@ const formatReviewerVotes = (votes: LabelVotes): string => {
       .join(', ')
     parts.push(`V: ${vVotes}`)
   } else {
-    parts.push(`V: ${colors.gray}⏳${colors.reset}`)
+    parts.push(`V: ${colors.gray}--${colors.reset}`)
   }
 
   return parts.join('  ')
@@ -286,8 +284,7 @@ const renderXml = (changes: readonly ChangeInfo[], project: string): void => {
     console.log('      <label name="Verified">')
     for (const vote of votes['Verified']) {
       const sign = vote.value > 0 ? '+' : ''
-      const pending = vote.pending ? ' pending="true"' : ''
-      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"${pending}/>`)
+      console.log(`        <vote name="${vote.name}" value="${sign}${vote.value}"/>`)
     }
     console.log('      </label>')
     console.log('    </reviewers>')
